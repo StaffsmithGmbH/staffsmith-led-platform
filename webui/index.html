@@ -67,6 +67,13 @@
   </div>
 
   <div class="card">
+    <h2>Vorschau</h2>
+    <div class="row"><input type="checkbox" id="prevOn" /><label for="prevOn">Live-Vorschau (Gerät → UI, gedrosselt)</label></div>
+    <canvas id="prevCanvas" width="320" height="24" style="width:100%;height:24px;margin-top:8px;border-radius:5px;background:#0f141d"></canvas>
+    <div class="muted" style="margin-top:6px">nur Vorschau, nicht bildgenau · <span id="prevRate">–</span> Hz</div>
+  </div>
+
+  <div class="card">
     <h2>Gruppe / Sync</h2>
     <div class="row"><input type="number" id="gid" min="0" max="255" value="7" style="width:90px" />
       <button id="join">Beitreten</button><button id="leave">Verlassen</button>
@@ -88,11 +95,13 @@
 <script src="protocol.js"></script>
 <script>
 (function () {
-  var P = window.SmithProto, E = window.SmithEffects;
-  var transport = null, applying = false;
+  var P = window.SmithProto, E = window.SmithEffects, M = window.SmithMaps;
+  var transport = null, applying = false, mockTickTimer = null;
   var els = {};
   ['url','conn','status','statusTxt','batt','pattern','controls','bright','brightVal','ceilVal',
-   'gid','join','leave','lead','grole','ggid','gpeers','scope','log'].forEach(function (id) { els[id] = document.getElementById(id); });
+   'gid','join','leave','lead','grole','ggid','gpeers','scope','log',
+   'prevOn','prevCanvas','prevRate'].forEach(function (id) { els[id] = document.getElementById(id); });
+  var prevCtx = els.prevCanvas.getContext('2d');
 
   function log(dir, msg) {
     els.log.textContent = dir + ' ' + JSON.stringify(msg) + '\n' + els.log.textContent;
@@ -138,6 +147,19 @@
   els.leave.addEventListener('click', function () { send(P.build.group('leave')); });
   els.lead.addEventListener('click', function () { send(P.build.group('leader')); });
 
+  // preview (low-rate device → UI RGB dump, opt-in; see docs/web-ui-protocol.md)
+  els.prevOn.addEventListener('click', function () { send(P.build.setPreview(els.prevOn.checked)); });
+  function drawPreview(msg) {
+    var w = els.prevCanvas.width, h = els.prevCanvas.height, n = msg.count || 0;
+    prevCtx.clearRect(0, 0, w, h);
+    if (!n) return;
+    var cw = w / n;
+    for (var k = 0; k < n; k++) {
+      prevCtx.fillStyle = 'rgb(' + msg.rgb[k * 3] + ',' + msg.rgb[k * 3 + 1] + ',' + msg.rgb[k * 3 + 2] + ')';
+      prevCtx.fillRect(Math.floor(k * cw), 0, Math.ceil(cw) + 1, h);
+    }
+  }
+
   // apply incoming device state to the UI (suppress echo while applying)
   function applyState(s) {
     applying = true;
@@ -148,24 +170,32 @@
     els.bright.classList.toggle('ceil', s.brightness > s.brightnessCeiling);
     els.grole.textContent = s.group.role; els.ggid.textContent = s.group.id; els.gpeers.textContent = s.group.peers;
     els.batt.textContent = '🔋 ' + Math.round(s.battery * 100) + '%';
+    if (s.previewEnabled != null) { els.prevOn.checked = s.previewEnabled; els.prevRate.textContent = s.previewRateHz; }
     applying = false;
   }
 
   function onMessage(msg) {
-    log('▼', msg);
+    if (msg.type !== 'preview') log('▼', msg); // preview frames are frequent — keep the log readable
     if (msg.type === 'state') applyState(msg);
+    else if (msg.type === 'preview') drawPreview(msg);
   }
 
   function setStatus(on, txt) { els.status.classList.toggle('on', on); els.statusTxt.textContent = txt; }
 
   els.conn.addEventListener('click', function () {
+    if (mockTickTimer) { clearInterval(mockTickTimer); mockTickTimer = null; }
     var url = (els.url.value || 'mock').trim();
     if (url === 'mock' || url === '') {
-      var dev = P.MockDevice({ effects: E });
+      var dev = P.MockDevice({ effects: E, map: M && M.discus ? M.discus('full') : null });
       transport = P.MockTransport(dev);
       transport.onmessage = onMessage;
       transport.onopen = function () { setStatus(true, 'verbunden (mock)'); };
       transport.open();
+      // the real firmware pushes `preview` frames on its own; the mock needs a heartbeat for that
+      mockTickTimer = setInterval(function () {
+        var msg = dev.tick(performance.now());
+        if (msg && transport.onmessage) transport.onmessage(msg);
+      }, 33);
     } else {
       try {
         var ws = new WebSocket(url);
