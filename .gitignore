@@ -1,0 +1,26 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Node / web tooling
+node_modules/
+npm-debug.log*
+dist/
+build/
+.env
+.env.*
+
+# ESP-IDF (firmware/, once added)
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/managed_components/
+firmware/dependencies.lock
+
+# Logs
+*.log

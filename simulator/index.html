@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<!--
+  SPDX-License-Identifier: Apache-2.0
+  Copyright 2026 StaffSmith GmbH
+  StaffSmith LED — Effect simulator (Loop L1).
+  Browser 3D preview of the coordinate-space effect engine, multi-map.
+  Open directly in a browser (file://). Needs internet for the three.js CDN.
+-->
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>StaffSmith LED — Effekt-Simulator (L1)</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0a0c10; color: #d7dde6;
+    font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+  #ui { position: fixed; top: 12px; left: 12px; z-index: 10; background: #141923cc;
+    border: 1px solid #263042; border-radius: 10px; padding: 12px 14px; backdrop-filter: blur(6px);
+    width: 230px; }
+  #ui h1 { font-size: 13px; margin: 0 0 10px; letter-spacing: .02em; }
+  #ui h1 span { color: #6fb3ff; }
+  label { display: block; margin: 10px 0 4px; color: #97a3b6; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  select, button { width: 100%; box-sizing: border-box; background: #0f141d; color: #d7dde6;
+    border: 1px solid #2b3648; border-radius: 7px; padding: 7px 8px; font-size: 13px; }
+  button { cursor: pointer; margin-top: 10px; }
+  button:hover { border-color: #6fb3ff; }
+  .row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .row input[type=checkbox] { width: auto; }
+  .row label { margin: 0; text-transform: none; letter-spacing: 0; font-size: 12px; color: #d7dde6; }
+  input[type=range] { width: 100%; }
+  #stat { margin-top: 12px; padding-top: 10px; border-top: 1px solid #263042; color: #8b97aa; font-size: 11px; }
+  #stat b { color: #cdd6e3; font-weight: 600; }
+  #hint { position: fixed; bottom: 10px; left: 12px; color: #5d6a7e; font-size: 11px; z-index: 10; }
+</style>
+</head>
+<body>
+  <div id="ui">
+    <h1>StaffSmith LED · <span>L1 Sim</span></h1>
+    <label for="map">Map</label>
+    <select id="map"></select>
+    <label for="effect">Effekt</label>
+    <select id="effect"></select>
+    <div id="controls"></div>
+    <div class="row"><input type="checkbox" id="rotate" checked /><label for="rotate">Mock-IMU-Rotation</label></div>
+    <label for="bright">Helligkeits-Ceiling</label>
+    <input type="range" id="bright" min="0" max="1" step="0.01" value="0.6" />
+    <button id="dl">Download map JSON</button>
+    <div id="stat">
+      Map: <b id="mapname">–</b><br />
+      LEDs: <b id="count">–</b> · <b id="fps">–</b> fps
+    </div>
+  </div>
+  <div id="hint">Maus: drehen / zoomen · Achsen = Welt-Frame · grau = Spearmount-Schacht / Bohrung</div>
+
+  <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="../engine/maps/cube.js"></script>
+  <script src="../engine/maps/discus.js"></script>
+  <script src="../engine/maps/strip.js"></script>
+  <script src="../engine/maps/matrix.js"></script>
+  <script src="../engine/effects.js"></script>
+  <script>
+  (function () {
+    // Map registry
+    var MAPS = [
+      { id: 'cube',           label: 'Würfel (5 Flächen)',     make: function () { return SmithMaps.cube(5); } },
+      { id: 'discus-full',    label: 'Discus — Vollscheibe',   make: function () { return SmithMaps.discus('full'); } },
+      { id: 'discus-annular', label: 'Discus — annular',       make: function () { return SmithMaps.discus('annular'); } },
+      { id: 'strip',          label: 'Extern — Stripe (60)',   make: function () { return SmithMaps.strip(60); } },
+      { id: 'matrix',         label: 'Extern — Matrix 16×16',  make: function () { return SmithMaps.matrix(16, 16); } }
+    ];
+    var ctx = { up: [0, 1, 0] };
+
+    // --- three.js scene ---
+    var renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    var scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0c10);
+
+    var camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(3.2, 2.4, 3.6);
+
+    var controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    // World reference frame (does NOT rotate with the prop)
+    scene.add(new THREE.AxesHelper(1.6));
+    var grid = new THREE.GridHelper(8, 16, 0x223047, 0x162132);
+    grid.position.y = -1.8;
+    scene.add(grid);
+
+    // The prop: a group the mock IMU rotates. LEDs + body live inside it.
+    var prop = new THREE.Group();
+    scene.add(prop);
+
+    function discTexture() {
+      var c = document.createElement('canvas'); c.width = c.height = 64;
+      var g = c.getContext('2d');
+      var grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+      grd.addColorStop(0, '#fff'); grd.addColorStop(0.5, 'rgba(255,255,255,.7)'); grd.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
+      var t = new THREE.Texture(c); t.needsUpdate = true; return t;
+    }
+    var SPRITE = discTexture();
+    var BODY_MAT = new THREE.LineBasicMaterial({ color: 0x2b3648 });
+
+    // --- current map state (rebuilt on map change) ---
+    var map, N, positions, colors, geo, colorAttr, points, body;
+
+    function clearGroup(g) { while (g && g.children.length) { var o = g.children.pop(); if (o.geometry) o.geometry.dispose(); } }
+
+    function circle(r, z) {
+      var pts = [], seg = 64;
+      for (var i = 0; i <= seg; i++) { var a = (2 * Math.PI * i) / seg; pts.push(new THREE.Vector3(r * Math.cos(a), r * Math.sin(a), z)); }
+      return new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), BODY_MAT);
+    }
+
+    function buildBody() {
+      body = body || new THREE.Group();
+      prop.add(body);
+      clearGroup(body);
+      if (map.body === 'cube') {
+        body.add(new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(2, 2, 2)), BODY_MAT));
+        var socket = new THREE.Mesh(new THREE.PlaneGeometry(2, 2),
+          new THREE.MeshBasicMaterial({ color: 0x1b2230, side: THREE.DoubleSide, transparent: true, opacity: 0.8 }));
+        socket.position.z = -1; body.add(socket); // -Z = spearmount socket
+      } else if (map.body === 'discus') {
+        body.add(circle(map.ring.r, map.ring.tz));
+        body.add(circle(map.ring.r, -map.ring.tz));
+        if (map.bore > 0) { body.add(circle(map.bore, map.ring.tz)); body.add(circle(map.bore, -map.ring.tz)); }
+      } else if (map.body === 'plane') {
+        body.add(new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(2, 2)), BODY_MAT));
+      } else if (map.body === 'line') {
+        body.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(
+          [new THREE.Vector3(-1, 0, 0), new THREE.Vector3(1, 0, 0)]), BODY_MAT));
+      }
+    }
+
+    function loadMap(maker) {
+      map = maker();
+      N = map.leds.length;
+      positions = new Float32Array(N * 3);
+      colors = new Float32Array(N * 3);
+      for (var k = 0; k < N; k++) {
+        positions[k * 3] = map.leds[k].p[0];
+        positions[k * 3 + 1] = map.leds[k].p[1];
+        positions[k * 3 + 2] = map.leds[k].p[2];
+      }
+      if (points) { prop.remove(points); points.geometry.dispose(); points.material.dispose(); }
+      geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      colorAttr = new THREE.BufferAttribute(colors, 3);
+      geo.setAttribute('color', colorAttr);
+      points = new THREE.Points(geo, new THREE.PointsMaterial({
+        size: map.dotSize || 0.16, map: SPRITE, vertexColors: true, transparent: true,
+        sizeAttenuation: true, depthWrite: false, blending: THREE.AdditiveBlending
+      }));
+      prop.add(points);
+      buildBody();
+      document.getElementById('mapname').textContent = map.name;
+      document.getElementById('count').textContent = N + ' px';
+    }
+
+    // --- UI ---
+    var mapSel = document.getElementById('map');
+    MAPS.forEach(function (m) { var o = document.createElement('option'); o.value = m.id; o.textContent = m.label; mapSel.appendChild(o); });
+    mapSel.addEventListener('change', function () {
+      var m = MAPS.filter(function (x) { return x.id === mapSel.value; })[0];
+      loadMap(m.make);
+    });
+
+    var sel = document.getElementById('effect');
+    SmithEffects.list.forEach(function (e) { var o = document.createElement('option'); o.value = e.id; o.textContent = e.label; sel.appendChild(o); });
+
+    // Effect parameter controls (from effect.controls — same metadata the DMX/GDTF map uses).
+    var uiParams = {};
+    var ctrlBox = document.getElementById('controls');
+    function renderControls(effect) {
+      ctrlBox.innerHTML = '';
+      uiParams = {};
+      (effect.controls || []).forEach(function (c) {
+        uiParams[c.id] = c.def;
+        if (c.type === 'toggle') {
+          var row = document.createElement('div'); row.className = 'row';
+          var cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!c.def;
+          cb.addEventListener('input', function () { uiParams[c.id] = cb.checked ? 1 : 0; });
+          var l = document.createElement('label'); l.textContent = c.label;
+          row.appendChild(cb); row.appendChild(l); ctrlBox.appendChild(row);
+        } else {
+          var lab = document.createElement('label'); lab.textContent = c.label; ctrlBox.appendChild(lab);
+          var rng = document.createElement('input'); rng.type = 'range';
+          rng.min = c.min; rng.max = c.max; rng.step = c.step; rng.value = c.def;
+          rng.addEventListener('input', function () { uiParams[c.id] = parseFloat(rng.value); });
+          ctrlBox.appendChild(rng);
+        }
+      });
+    }
+    sel.addEventListener('change', function () { renderControls(SmithEffects.byId(sel.value)); });
+    renderControls(SmithEffects.list[0]);
+
+    var rotate = document.getElementById('rotate');
+    var bright = document.getElementById('bright');
+    document.getElementById('dl').addEventListener('click', function () {
+      // export the per-LED contract fields only (frozen SPEC v1)
+      var out = { name: map.name, space: map.space, count: map.count,
+        leds: map.leds.map(function (l) { return { i: l.i, face: l.face, p: l.p, uv: l.uv, n: l.n, group: l.group }; }) };
+      var blob = new Blob([JSON.stringify(out, null, 0)], { type: 'application/json' });
+      var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = map.name + '.json'; a.click();
+    });
+
+    window.addEventListener('resize', function () {
+      camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    loadMap(MAPS[0].make);
+
+    // --- render loop ---
+    var clamp01 = SmithEffects.util.clamp01;
+    var tmp = new THREE.Vector3(), tmpN = new THREE.Vector3();
+    var axis = new THREE.Vector3(0.3, 1, 0.15).normalize();
+    var led = {};
+    var start = null, fpsT = 0, frames = 0;
+
+    function frame(now) {
+      if (start === null) start = now;
+      var t = (now - start) / 1000;
+
+      if (rotate.checked) prop.quaternion.setFromAxisAngle(axis, t * 0.6);
+      else prop.quaternion.identity();
+      var q = prop.quaternion;
+
+      var eff = SmithEffects.byId(sel.value).fn;
+      ctx.params = uiParams;                   // live UI controls → effect params
+      var b = parseFloat(bright.value);
+
+      for (var k = 0; k < N; k++) {
+        var L = map.leds[k];
+        tmp.set(L.p[0], L.p[1], L.p[2]).applyQuaternion(q);
+        tmpN.set(L.n[0], L.n[1], L.n[2]).applyQuaternion(q);
+        led.i = L.i; led.face = L.face;
+        led.x = L.p[0]; led.y = L.p[1]; led.z = L.p[2];
+        led.u = L.uv[0]; led.v = L.uv[1];
+        led.nx = L.n[0]; led.ny = L.n[1]; led.nz = L.n[2];
+        led.wx = tmp.x; led.wy = tmp.y; led.wz = tmp.z;
+        led.wnx = tmpN.x; led.wny = tmpN.y; led.wnz = tmpN.z;
+        var c = eff(led, t, ctx);
+        colors[k * 3] = clamp01(c[0]) * b;
+        colors[k * 3 + 1] = clamp01(c[1]) * b;
+        colors[k * 3 + 2] = clamp01(c[2]) * b;
+      }
+      colorAttr.needsUpdate = true;
+
+      frames++; if (now - fpsT > 500) { document.getElementById('fps').textContent = Math.round(frames * 1000 / (now - fpsT)); frames = 0; fpsT = now; }
+
+      controls.update();
+      renderer.render(scene, camera);
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  })();
+  </script>
+</body>
+</html>

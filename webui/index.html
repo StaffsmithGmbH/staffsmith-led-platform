@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<!--
+  SPDX-License-Identifier: Apache-2.0
+  Copyright 2026 StaffSmith GmbH
+  StaffSmith LED — Web-UI MVP (control surface). Pixelblaze-v3-orientiert, eigene Implementierung.
+  Spricht das v1-WebSocket-Protokoll (protocol.js). Läuft standalone über ein Mock-Device
+  (URL = "mock") oder gegen echte Firmware (ws://<device>). Web = primäre Steuerung.
+-->
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>StaffSmith LED — Control</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0a0c10; color: #d7dde6; font: 14px/1.45 system-ui, sans-serif; }
+  .wrap { max-width: 460px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 16px; margin: 0 0 4px; } h1 span { color: #6fb3ff; }
+  .sub { color: #8b97aa; font-size: 12px; margin-bottom: 14px; }
+  .card { background: #141923; border: 1px solid #263042; border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+  .card h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #97a3b6; margin: 0 0 10px; }
+  label { display: block; margin: 10px 0 4px; color: #97a3b6; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  select, button, input[type=text], input[type=number] { background: #0f141d; color: #d7dde6; border: 1px solid #2b3648;
+    border-radius: 7px; padding: 7px 8px; font-size: 14px; box-sizing: border-box; }
+  select, input[type=range] { width: 100%; }
+  button { cursor: pointer; } button:hover { border-color: #6fb3ff; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .row > * { margin: 0; }
+  .row label { margin: 0; text-transform: none; letter-spacing: 0; font-size: 13px; color: #d7dde6; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #b5563f; display: inline-block; }
+  .dot.on { background: #4caf72; }
+  .val { color: #cdd6e3; font-variant-numeric: tabular-nums; }
+  .muted { color: #8b97aa; font-size: 12px; }
+  #log { font: 11px/1.4 ui-monospace, monospace; color: #8b97aa; max-height: 120px; overflow: auto;
+    background: #0c1017; border-radius: 7px; padding: 8px; white-space: pre-wrap; }
+  .bar { display: flex; gap: 8px; } .bar input { flex: 1; }
+  .ceil { accent-color: #b5563f; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>StaffSmith LED · <span>Control</span></h1>
+  <div class="sub">Web-UI MVP — primäre Steuerung. Protokoll v1 · Mock oder ws://Gerät.</div>
+
+  <div class="card">
+    <h2>Verbindung</h2>
+    <div class="bar">
+      <input type="text" id="url" value="mock" placeholder="mock  oder  ws://192.168.4.1/ws" />
+      <button id="conn">Verbinden</button>
+    </div>
+    <div class="row" style="margin-top:10px"><span class="dot" id="status"></span>
+      <span class="muted" id="statusTxt">getrennt</span>
+      <span class="muted" style="margin-left:auto" id="batt">–</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Pattern</h2>
+    <select id="pattern"></select>
+    <div id="controls"></div>
+  </div>
+
+  <div class="card">
+    <h2>Helligkeit</h2>
+    <input type="range" id="bright" min="0" max="1" step="0.01" value="0.5" />
+    <div class="row muted"><span>angefordert <span class="val" id="brightVal">0.50</span></span>
+      <span style="margin-left:auto">HW-Ceiling <span class="val" id="ceilVal">–</span> (nicht aushebelbar)</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Gruppe / Sync</h2>
+    <div class="row"><input type="number" id="gid" min="0" max="255" value="7" style="width:90px" />
+      <button id="join">Beitreten</button><button id="leave">Verlassen</button>
+      <button id="lead">Leader</button></div>
+    <div class="row muted" style="margin-top:10px">Rolle <span class="val" id="grole">standalone</span>
+      · ID <span class="val" id="ggid">0</span> · Peers <span class="val" id="gpeers">0</span></div>
+    <div class="row" style="margin-top:10px"><input type="checkbox" id="scope" /><label for="scope">Änderungen an die ganze Gruppe senden</label></div>
+  </div>
+
+  <div class="card">
+    <h2>Log</h2>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script src="../engine/maps/cube.js"></script>
+<script src="../engine/maps/discus.js"></script>
+<script src="../engine/effects.js"></script>
+<script src="protocol.js"></script>
+<script>
+(function () {
+  var P = window.SmithProto, E = window.SmithEffects;
+  var transport = null, applying = false;
+  var els = {};
+  ['url','conn','status','statusTxt','batt','pattern','controls','bright','brightVal','ceilVal',
+   'gid','join','leave','lead','grole','ggid','gpeers','scope','log'].forEach(function (id) { els[id] = document.getElementById(id); });
+
+  function log(dir, msg) {
+    els.log.textContent = dir + ' ' + JSON.stringify(msg) + '\n' + els.log.textContent;
+  }
+  function scope() { return els.scope.checked ? 'group' : 'self'; }
+  function send(msg) { if (!transport) return; log('▲', msg); transport.send(msg); }
+
+  // pattern dropdown
+  E.list.forEach(function (e) { var o = document.createElement('option'); o.value = e.id; o.textContent = e.label; els.pattern.appendChild(o); });
+  els.pattern.addEventListener('change', function () { send(P.build.setPattern(els.pattern.value, scope())); });
+
+  // controls rendered from the SELECTED effect's controls metadata; values come from device state
+  function renderControls(effectId, params) {
+    var eff = E.byId(effectId); els.controls.innerHTML = '';
+    (eff.controls || []).forEach(function (c) {
+      var v = params && params[c.id] != null ? params[c.id] : c.def;
+      if (c.type === 'toggle') {
+        var row = document.createElement('div'); row.className = 'row'; row.style.marginTop = '10px';
+        var cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!v;
+        cb.addEventListener('input', function () { send(P.build.setParam(c.id, cb.checked ? 1 : 0, scope())); });
+        var l = document.createElement('label'); l.textContent = c.label;
+        row.appendChild(cb); row.appendChild(l); els.controls.appendChild(row);
+      } else {
+        var lab = document.createElement('label'); lab.textContent = c.label; els.controls.appendChild(lab);
+        var rng = document.createElement('input'); rng.type = 'range';
+        rng.min = c.min; rng.max = c.max; rng.step = c.step; rng.value = v;
+        rng.addEventListener('input', function () {
+          if (applying) return; send(P.build.setParam(c.id, parseFloat(rng.value), scope()));
+        });
+        els.controls.appendChild(rng);
+      }
+    });
+  }
+
+  // brightness
+  els.bright.addEventListener('input', function () {
+    els.brightVal.textContent = parseFloat(els.bright.value).toFixed(2);
+    if (!applying) send(P.build.setBrightness(parseFloat(els.bright.value), scope()));
+  });
+
+  // group
+  els.join.addEventListener('click', function () { send(P.build.group('join', parseInt(els.gid.value, 10) || 0)); });
+  els.leave.addEventListener('click', function () { send(P.build.group('leave')); });
+  els.lead.addEventListener('click', function () { send(P.build.group('leader')); });
+
+  // apply incoming device state to the UI (suppress echo while applying)
+  function applyState(s) {
+    applying = true;
+    els.pattern.value = s.pattern;
+    renderControls(s.pattern, s.params);
+    els.bright.value = s.brightness; els.brightVal.textContent = Number(s.brightness).toFixed(2);
+    els.ceilVal.textContent = Number(s.brightnessCeiling).toFixed(2);
+    els.bright.classList.toggle('ceil', s.brightness > s.brightnessCeiling);
+    els.grole.textContent = s.group.role; els.ggid.textContent = s.group.id; els.gpeers.textContent = s.group.peers;
+    els.batt.textContent = '🔋 ' + Math.round(s.battery * 100) + '%';
+    applying = false;
+  }
+
+  function onMessage(msg) {
+    log('▼', msg);
+    if (msg.type === 'state') applyState(msg);
+  }
+
+  function setStatus(on, txt) { els.status.classList.toggle('on', on); els.statusTxt.textContent = txt; }
+
+  els.conn.addEventListener('click', function () {
+    var url = (els.url.value || 'mock').trim();
+    if (url === 'mock' || url === '') {
+      var dev = P.MockDevice({ effects: E });
+      transport = P.MockTransport(dev);
+      transport.onmessage = onMessage;
+      transport.onopen = function () { setStatus(true, 'verbunden (mock)'); };
+      transport.open();
+    } else {
+      try {
+        var ws = new WebSocket(url);
+        transport = { send: function (m) { ws.send(JSON.stringify(m)); } };
+        ws.onopen = function () { setStatus(true, 'verbunden ' + url); transport.send(P.build.hello()); };
+        ws.onclose = function () { setStatus(false, 'getrennt'); };
+        ws.onerror = function () { setStatus(false, 'Fehler'); };
+        ws.onmessage = function (ev) { try { onMessage(JSON.parse(ev.data)); } catch (e) { log('!', String(ev.data)); } };
+      } catch (e) { setStatus(false, 'ungültige URL'); }
+    }
+  });
+
+  // auto-connect to mock for instant demo
+  els.conn.click();
+})();
+</script>
+</body>
+</html>
