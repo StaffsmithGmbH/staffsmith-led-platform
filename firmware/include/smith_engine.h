@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 StaffSmith GmbH
 //
-// StaffSmith LED Engine — Firmware Port Contract (C), SPEC v1 DRAFT.
+// StaffSmith LED Engine — Firmware Port Contract (C), SPEC v1 FROZEN (2026-07-05).
 //
 // This header is the ESP-IDF/ESP32 C counterpart of the frozen JS/TS engine
 // contract in ../../engine/SPEC.md (v1 FROZEN 2026-06-27) and

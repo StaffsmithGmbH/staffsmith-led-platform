@@ -1,12 +1,13 @@
-# Firmware-Engine-Port — SPEC v1 DRAFT (ESP-IDF, C-Vertrag)
+# Firmware-Engine-Port — SPEC v1 FROZEN (ESP-IDF, C-Vertrag)
 
 Dieses Dokument + [`include/smith_engine.h`](include/smith_engine.h) bilden zusammen den
 **C-Port-Vertrag** der eingefrorenen JS/TS-Engine ([`../engine/SPEC.md`](../engine/SPEC.md)
 v1 FROZEN 2026-06-27, [`../engine/effects.js`](../engine/effects.js)). Nächster Track-A-Schritt
 laut [loops/STATE.md](../../../loops/STATE.md) „Nächste Aktionen" / [STATUS.md](../../../STATUS.md).
 
-**Status: DRAFT v1 — NICHT eingefroren.** Kein Firmware-Code, keine `.c`-Implementierung — nur
-Vertrag (Spec + kompilierbarer Header ohne Implementierung), wie im Ticket gefordert.
+**Status: FROZEN v1 — eingefroren am 2026-07-05, per User-Entscheid.** Kein Firmware-Code, keine
+`.c`-Implementierung — nur Vertrag (Spec + kompilierbarer Header ohne Implementierung), wie im
+Ticket gefordert.
 
 ## 1. Scope
 
@@ -158,14 +159,18 @@ transparent.
 
 ## 10. Freeze-Status
 
-**DRAFT v1** — nicht eingefroren. Laut der Loop-Engineering-Disziplin dieses Projekts
-([`../../../CLAUDE.md`](../../../CLAUDE.md) „Gate-Protokoll": ein Loop ist erst „done", wenn sein
-Exit-Gate per Messung/Nachweis erfüllt ist) friert diese Spec ein, sobald L3s Gate auf echter
-ESP32-S3-Hardware erfüllt ist (Refreshrate/Glätte verifiziert, Protokollumschaltung bewiesen) —
-aktuell liegt kein ESP32-S3-Dev-Kit vor (L2/L4-Teile sind noch in Bestellung, laut
-[`../../../STATUS.md`](../../../STATUS.md)). Änderungen vor diesem Punkt sind erwartet und
-brauchen keinen v2-Sprung; Änderungen NACH dem Freeze folgen derselben versionierten
-Bruch-Regel wie `engine/SPEC.md` (`SMITH_ENGINE_ABI_VERSION`-Bump + begründeter LOG.md-Eintrag).
+**FROZEN v1 — eingefroren am 2026-07-05, per User-Entscheid.** Ursprünglich sah dieses Dokument
+vor, den Vertrag erst einzufrieren, sobald L3s Gate auf echter ESP32-S3-Hardware erfüllt ist
+(Refreshrate/Glätte verifiziert, Protokollumschaltung bewiesen). Da weiterhin kein ESP32-S3-Dev-Kit
+vorliegt (L2/L4-Teile laut [`../../../STATUS.md`](../../../STATUS.md) noch in Bestellung), ist
+dieses L3-Hardware-Gate NICHT erfüllt — der Freeze wurde stattdessen bewusst per expliziter
+User-Entscheidung vorgezogen, um darauf aufbauende Track-A-Arbeit (z. B. den Codegen-Baustein aus
+§9, Map-JSON → C) auf einem stabilen Vertrag umsetzen zu können, statt auf Hardware zu warten.
+L3s Messnachweis bleibt ein offener, nachgelagerter Bestätigungspunkt (kein Blocker mehr für
+diesen Vertrag selbst) — sollte er strukturelle Änderungen erzwingen, gilt dafür dieselbe
+versionierte Bruch-Regel wie für jede andere Änderung ab jetzt: analog zu `engine/SPEC.md`
+braucht jede Änderung nach diesem Freeze einen `SMITH_ENGINE_ABI_VERSION`-Bump + einen
+begründeten LOG.md-Eintrag.
 
 ## 11. Syntaxprüfung
 
